@@ -76,6 +76,25 @@ services:
     ports:
       - "9092:9092"
 
+  redpanda-setup:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    depends_on:
+      - redpanda
+    entrypoint: [ "/bin/sh", "-c" ]
+    command: |
+      "
+      # Wait for Redpanda to be ready
+      until rpk cluster info --brokers redpanda:9092; do
+        echo 'Waiting for Redpanda...'
+        sleep 2
+      done
+      
+      # Create your topic(s)
+      rpk topic create raw-documents --brokers redpanda:9092 --partitions 1 --replicas 1
+      
+      echo 'Topic created successfully!'
+      "
+
   # Flink Cluster
   jobmanager:
     image: flink:1.19.0-java17
@@ -88,6 +107,7 @@ services:
         jobmanager.rpc.address: jobmanager
     volumes:
       - ./build/libs:/opt/flink/usrlib
+
   taskmanager:
     image: flink:1.19.0-java17
     depends_on:
@@ -99,6 +119,25 @@ services:
         jobmanager.rpc.address: jobmanager
     volumes:
       - ./build/libs:/opt/flink/usrlib
+
+  flink-job-submitter:
+    image: flink:1.19.0-java17
+    depends_on:
+      - jobmanager
+      - redpanda
+    volumes:
+      - ./build/libs:/opt/flink/usrlib
+    entrypoint: /bin/sh -c
+    command: |
+      "
+      until curl -s http://jobmanager:8081/overview | grep -q 'taskmanagers'; do
+        echo 'Waiting for JobManager and TaskManagers...'
+        sleep 2
+      done
+      
+      echo 'Submitting Flink Job...'
+      flink run -d -m jobmanager:8081 /opt/flink/usrlib/lumenstream-1.0-SNAPSHOT.jar
+      "
 
 volumes:
   minio_data:
