@@ -1,0 +1,68 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.3.1'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+}
+
+group = 'org.arch'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    flinkVersion = '1.19.0'
+    milvusVersion = '2.6.14'
+}
+
+dependencies {
+    compileOnly "org.apache.flink:flink-core:${flinkVersion}"
+    compileOnly "org.apache.flink:flink-streaming-java:${flinkVersion}"
+    compileOnly "org.apache.flink:flink-clients:${flinkVersion}"
+    implementation "org.apache.flink:flink-connector-kafka:3.2.0-1.19"
+
+    implementation("io.milvus:milvus-sdk-java:${milvusVersion}") {
+        // Exclude the standard gRPC that causes the policy error
+        exclude group: 'io.grpc', module: 'grpc-netty'
+    }
+
+    // Add the shaded version which is safe for Flink
+    implementation "io.grpc:grpc-netty-shaded:1.61.1"
+
+    implementation "com.fasterxml.jackson.core:jackson-databind:2.15.2"
+    implementation "org.slf4j:slf4j-log4j12:1.7.36"
+
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+shadowJar {
+    zip64 true
+    archiveClassifier.set('')
+    mergeServiceFiles()
+
+    // ONLY relocate grpc
+    // relocate 'io.grpc', 'org.arch.shaded.io.grpc'
+
+    manifest {
+        attributes 'Main-Class': 'org.arch.RealTimeRAGJob'
+    }
+}
+
+// Make the standard 'build' task depend on 'shadowJar'
+build.dependsOn shadowJar
