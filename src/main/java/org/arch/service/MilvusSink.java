@@ -11,88 +11,79 @@ import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.service.collection.request.CreateCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
 import io.milvus.v2.service.vector.request.InsertReq;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.arch.model.VectorRecord;
 
-import java.util.*;
-
 public class MilvusSink extends RichSinkFunction<VectorRecord> {
 
-    private transient MilvusClientV2 client;
+  private transient MilvusClientV2 client;
 
-    @Override
-    public void open(Configuration parameters) {
+  @Override
+  public void open(Configuration parameters) {
 
-        LoadBalancerRegistry.getDefaultRegistry()
-                .register(new PickFirstLoadBalancerProvider());
+    LoadBalancerRegistry.getDefaultRegistry().register(new PickFirstLoadBalancerProvider());
 
-        NameResolverRegistry.getDefaultRegistry().register(new DnsNameResolverProvider());
+    NameResolverRegistry.getDefaultRegistry().register(new DnsNameResolverProvider());
 
-        ClassLoader originalClassLoader = Thread.currentThread().getContextClassLoader();
-        try {
-            Thread.currentThread().setContextClassLoader(MilvusClientV2.class.getClassLoader());
+    ClassLoader originalClassLoader = Thread.currentThread().getContextClassLoader();
+    try {
+      Thread.currentThread().setContextClassLoader(MilvusClientV2.class.getClassLoader());
 
-            ConnectConfig config = ConnectConfig.builder()
-                    .uri("tcp://milvus-standalone:19530")
-                    .build();
-            client = new MilvusClientV2(config);
-        } finally {
-            Thread.currentThread().setContextClassLoader(originalClassLoader);
-        }
+      ConnectConfig config = ConnectConfig.builder().uri("tcp://milvus-standalone:19530").build();
+      client = new MilvusClientV2(config);
+    } finally {
+      Thread.currentThread().setContextClassLoader(originalClassLoader);
+    }
+  }
+
+  @Override
+  public void invoke(VectorRecord record, Context context) {
+    Gson gson = new Gson();
+
+    List<Long> ids = Collections.singletonList(System.currentTimeMillis());
+
+    List<List<Float>> vectors = Collections.singletonList(record.getVector());
+
+    List<String> texts = Collections.singletonList(record.getText());
+
+    boolean exists =
+        client.hasCollection(HasCollectionReq.builder().collectionName("documents").build());
+
+    System.out.println("Collection exists? " + exists);
+
+    if (!exists) {
+      int dimension = record.getVector().size();
+      CreateCollectionReq collectionParam =
+          CreateCollectionReq.builder().collectionName("documents").dimension(dimension).build();
+      client.createCollection(collectionParam);
     }
 
-    @Override
-    public void invoke(VectorRecord record, Context context) {
-        Gson gson = new Gson();
+    List<JsonObject> data = new ArrayList<>();
+    for (int i = 0; i < ids.size(); i++) {
+      JsonObject row = new JsonObject();
+      row.addProperty("id", ids.get(i)); // Matches default PK
 
-        List<Long> ids = Collections.singletonList(System.currentTimeMillis());
+      // Use "vector", NOT "embedding" (unless you define a custom schema)
+      row.add("vector", gson.toJsonTree(vectors.get(i)));
 
-        List<List<Float>> vectors = Collections.singletonList(record.getVector());
-
-        List<String> texts = Collections.singletonList(record.getText());
-
-        boolean exists = client.hasCollection(
-                HasCollectionReq.builder()
-                        .collectionName("documents").build()
-        );
-
-        System.out.println("Collection exists? " + exists);
-
-        if (!exists) {
-            int dimension = record.getVector().size();
-            CreateCollectionReq collectionParam = CreateCollectionReq.builder()
-                    .collectionName("documents")
-                    .dimension(dimension)
-                    .build();
-            client.createCollection(collectionParam);
-        }
-
-        List<JsonObject> data = new ArrayList<>();
-        for (int i = 0; i < ids.size(); i++) {
-            JsonObject row = new JsonObject();
-            row.addProperty("id", ids.get(i)); // Matches default PK
-
-            // Use "vector", NOT "embedding" (unless you define a custom schema)
-            row.add("vector", gson.toJsonTree(vectors.get(i)));
-
-            row.addProperty("text", texts.get(i)); // Dynamic field
-            data.add(row);
-        }
-
-
-        InsertReq insertReq = InsertReq.builder()
-                .collectionName("documents")
-                .data(data)
-                .build();
-
-        client.insert(insertReq);
+      row.addProperty("text", texts.get(i)); // Dynamic field
+      data.add(row);
     }
 
-    @Override
-    public void close() {
-        if (client != null) {
-            client.close();
-        }
+    InsertReq insertReq = InsertReq.builder().collectionName("documents").data(data).build();
+
+    client.insert(insertReq);
+  }
+
+  @Override
+  public void close() {
+    if (client != null) {
+      client.close();
     }
+  }
 }
